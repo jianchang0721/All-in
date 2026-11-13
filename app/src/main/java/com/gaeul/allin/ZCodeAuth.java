@@ -1178,6 +1178,8 @@ public class ZCodeAuth {
             conn.setConnectTimeout(4000);
             conn.setReadTimeout(6000);
             conn.setRequestProperty("Authorization", "Bearer " + key);
+            // 连通性探测同样要过客户端指纹门。
+            ZCodeIdentity.apply(conn, "probe", false, false);
             return conn.getResponseCode() == 200;
         } catch (Throwable t) {
             return false;

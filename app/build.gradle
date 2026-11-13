@@ -296,6 +296,7 @@ def offlineTestMains = [
         'com.gaeul.allin.QoderHistoryRepairTest',
         'com.gaeul.allin.ZCodeGiftModelsOfflineTest',
         'com.gaeul.allin.ZCodeGiftDecimalUnitsHttpTest',
+        'com.gaeul.allin.ZCodeIdentityOfflineTest',
 ]
 
 def mainClassesDir = provider { tasks.named('compileReleaseJavaWithJavac', JavaCompile).get().destinationDirectory.get() }
