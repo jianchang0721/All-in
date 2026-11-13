@@ -148,9 +148,20 @@ final class ZCodeGift {
         return "linux";
     }
 
-    /** 对应 os.release()：Android 上是内核版本串 */
+    /**
+     * 对应 os.release()：本网关运行在 Android 上，System.getProperty("os.version") 是手机内核版本串，
+     * 形如 "5.10.168-android13-..."，里面带 "android" 标记。这个值会同时进入 X-Os-Version 请求头
+     * 和 body 的 Environment 块（"OS Version: linux <ver> <arch>"）。
+     * 官方 ZCode 客户端是桌面 electron，内核版本不可能含 android；一旦服务器在指纹里看到这个标记，
+     * 就按「非官方/异常客户端」拦掉（405/3012 或直接 403）。所以这里必须把 Android 内核串抹成
+     * 一个干净的桌面 Linux 内核版本，与 osCategory()="linux"、platform()="linux-*" 的桌面口径保持一致。
+     */
     private static String osRelease() {
-        return System.getProperty("os.version", "unknown");
+        String v = System.getProperty("os.version", "");
+        if (v == null || v.isEmpty() || v.toLowerCase(Locale.ROOT).contains("android")) {
+            return "6.2.0";
+        }
+        return v;
     }
 
     /** 对应 osVersion()：platform + " " + release() + " " + arch()（与 x-os-version 不同） */
