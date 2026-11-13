@@ -1802,6 +1802,9 @@ public class AntigravityAuth {
             return postJson(loadBase + "/v1internal:loadCodeAssist", access, body,
                     USER_AGENT + " google-api-nodejs-client/10.3.0");
         } catch (Exception e) {
+            // 明确的 4xx（含「地区未开放」的 403 / PERMISSION_DENIED）是服务端对账号的判定；
+            // 两个域是同一个 Code Assist 后端，换域名重发只会多挨一次拒绝。
+            if (!AntigravityEligibility.shouldRetryOnAltBase(codeAssistStatus(e))) throw e;
             return postJson(chatBase + "/v1internal:loadCodeAssist", access, body,
                     USER_AGENT + " google-api-nodejs-client/10.3.0");
         }

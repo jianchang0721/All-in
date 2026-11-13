@@ -32,7 +32,7 @@ public final class FailureLayers {
     /** 失败分类。粒度只到“查出来的原因不同、处置不同”，不再往下拆。 */
     public enum Kind {
         DNS, TLS, TIMEOUT, REFUSED, NETWORK,
-        AUTH, RESTRICTED, NOT_FOUND, METHOD_NOT_ALLOWED,
+        AUTH, RESTRICTED, NOT_ELIGIBLE, NOT_FOUND, METHOD_NOT_ALLOWED,
         RATE, QUOTA, BUSINESS, SCHEMA, EMPTY_REPLY,
         UNREAD, UNKNOWN_EXECUTION, LOCAL_REJECTION, COOLDOWN, NO_CANDIDATE,
         OTHER, NONE
@@ -77,6 +77,7 @@ public final class FailureLayers {
             case ACCOUNT_THROUGHPUT: return Kind.RATE;
             case QUOTA: return Kind.QUOTA;
             case AUTH: return Kind.AUTH;
+            case NOT_ELIGIBLE: return Kind.NOT_ELIGIBLE;
             case REQUEST: return Kind.BUSINESS;
             case OVERLOAD: return Kind.OTHER;
             case NETWORK: return Kind.NETWORK;
@@ -88,6 +89,8 @@ public final class FailureLayers {
 
     /** 结构化错误码优先；429 保持既有 rate 契约。 */
     public static Kind fromResponse(int status, String body) {
+        // 措辞特异，且网关可能把这条 403 包装成 502：先从正文认出来，再谈状态码。
+        if (AntigravityEligibility.isIndividualNotEligible(status, body)) return Kind.NOT_ELIGIBLE;
         if (status <= 0) return Kind.OTHER;
         if (status == 429) return Kind.RATE;
         String text = body == null ? "" : body.toLowerCase(Locale.ROOT);
@@ -134,7 +137,7 @@ public final class FailureLayers {
         if (k == null) return Layer.NONE;
         switch (k) {
             case DNS: case TLS: case TIMEOUT: case REFUSED: case NETWORK: return Layer.NETWORK;
-            case AUTH: case RESTRICTED: case NO_CANDIDATE: case COOLDOWN: return Layer.LOGIN;
+            case AUTH: case RESTRICTED: case NOT_ELIGIBLE: case NO_CANDIDATE: case COOLDOWN: return Layer.LOGIN;
             case QUOTA: return Layer.BALANCE;
             case NOT_FOUND: case METHOD_NOT_ALLOWED: return Layer.CATALOG;
             case RATE: case BUSINESS: case SCHEMA: case EMPTY_REPLY:
@@ -173,6 +176,7 @@ public final class FailureLayers {
             case NETWORK: return "链路不通";
             case AUTH: return "认证或凭据被拒";
             case RESTRICTED: return "请求被拒绝 (403)";
+            case NOT_ELIGIBLE: return "账号所在地区未开放该服务";
             // 不带 HTTP 码：上游常用 400 说"没有这个模型"，写死 404 会自相矛盾
             case NOT_FOUND: return "模型或端点不存在";
             case METHOD_NOT_ALLOWED: return "方法不被接受 (405)";
@@ -206,6 +210,7 @@ public final class FailureLayers {
             case NETWORK: return "本机到上游这一跳没通：先查网络和代理，别动账号。";
             case AUTH: return "上游拒了凭据：这个账号或 Key 需要重新登录、刷新或更换。";
             case RESTRICTED: return "供应商拒绝了这次请求：检查凭据、模型权限及供应商返回的原因。";
+            case NOT_ELIGIBLE: return AntigravityEligibility.advice();
             case NOT_FOUND: return "这个模型或地址对不上：换模型、核对模型名与 baseUrl，别急着换账号或 Key。";
             case METHOD_NOT_ALLOWED: return "端点不接受这个方法：可能是协议选错（OpenAI 与 Anthropic 走反了），改协议而不是换账号。";
             case RATE: return "上游限流：检查 Retry-After 和限流范围，再决定何时重试。";

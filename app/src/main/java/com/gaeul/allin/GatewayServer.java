@@ -7875,6 +7875,8 @@ public class GatewayServer extends NanoHTTPD {
                     if ("zcode".equals(target.providerId) && err.contains("1113")) {
                         ret.put("hint", "这个型号不在 ZCode 赠送额度的覆盖范围内，只能走 GLM Coding Plan；"
                                 + "账号没有 Plan 或 Plan 额度用尽时就会返回 1113。");
+                    } else if ("zcode".equals(target.providerId) && ZCodeIdentity.isUnofficialClient(a.status, err)) {
+                        ret.put("hint", ZCodeIdentity.hint());
                     }
                 }
                 return jsonResponse(ret);
@@ -12406,6 +12408,8 @@ public class GatewayServer extends NanoHTTPD {
             // when it shipped, because that is the order its authors signed against.
             java.util.Map<String,String> quirkHeaders=request==null || request.quirks==null ? java.util.Collections.emptyMap()
                     : request.quirks.headers(target.providerId, target.protocol, targetUrl);
+            // ZCode 上游按客户端指纹放行：规则文档里的 claude-cli / x-stainless-* 身份头不能带出去。
+            if ("zcode".equals(target.providerId)) quirkHeaders=ZCodeIdentity.stripConflicts(quirkHeaders);
             final boolean rulesAfterIdentity=chatRulesApplyAfterIdentity(request,isWorkBuddy);
             if(!rulesAfterIdentity) applyQuirkHeaders(conn,quirkHeaders);
             java.util.Map<String,String> workbuddyHeaders=WorkBuddyPolicy.headers(target.providerId,targetUrl,target.apiKey,target.account,U_SESSION.get(),
@@ -12431,6 +12435,7 @@ public class GatewayServer extends NanoHTTPD {
             }
 
             if("zcode".equals(target.providerId)) {
+                ZCodeIdentity.apply(conn, zcodeAccountScope(target), target.isAnthropic, payload.optBoolean("stream", false));
                 ZCodeRefusalPolicy.Hold held=zcodeRefusals().before(targetUrl,zcodeAccountScope(target),zcodeNetworkScope());
                 if(held!=null){out.safeZcodeRejection=true;out.status=429;out.body="ZCode local refusal cooldown";out.response=errorResponse(429,out.body);out.response.addHeader("Retry-After",Long.toString((held.retryAfterMillis+999)/1000));return out;}
             }
@@ -14196,6 +14201,8 @@ public class GatewayServer extends NanoHTTPD {
                 }
                 byte[] requestBytes = anth.toString().getBytes("UTF-8");
                 conn.setFixedLengthStreamingMode(requestBytes.length);
+                if ("zcode".equals(target.providerId))
+                    ZCodeIdentity.apply(conn, zcodeAccountScope(target), true, clientWantsStream);
                 if(zcodeMessages) {conn.setRequestProperty("x-session-id",zcodeSession);conn.setInstanceFollowRedirects(false);RequestContext current=REQUEST_CONTEXT.get();if(current!=null){current.check();current.attach(conn);}out.sent=true;}
                 if (!genericAnthropic) {
                     conn.setInstanceFollowRedirects(false);
@@ -17405,9 +17412,15 @@ public class GatewayServer extends NanoHTTPD {
                 project=acc.optString("project","");
             } catch (Exception e) {
                 String msg = e.getMessage() == null ? "Antigravity 取 Cloud 项目失败" : e.getMessage();
-                out.status = 502;
-                out.body = msg;
-                out.response = errorResponse(502, msg);
+                int upstreamStatus = AntigravityAuth.codeAssistStatus(e);
+                boolean notEligible = AntigravityEligibility.isIndividualNotEligible(msg);
+                out.status = upstreamStatus >= 400 && upstreamStatus <= 599 ? upstreamStatus : 502;
+                out.stopFallback = notEligible || (upstreamStatus >= 400 && upstreamStatus < 500);
+                if (notEligible) {
+                    out.body = AntigravityEligibility.label() + "：" + AntigravityEligibility.advice()
+                            + "（上游：" + msg + "）";
+                } else out.body = msg;
+                out.response = errorResponse(out.status, out.body);
                 return out;
             }
             // Project assignment, if needed, was committed before use.
@@ -17497,6 +17510,7 @@ public class GatewayServer extends NanoHTTPD {
                     }
                 }
                 out.body = errBody;
+                if (AntigravityEligibility.isIndividualNotEligible(errBody)) out.stopFallback = true;
                 Status st = Status.lookup(statusCode) != null ? Status.lookup(statusCode) : Status.INTERNAL_ERROR;
                 Response r = newFixedLengthResponse(st, "application/json; charset=UTF-8", errBody);
                 for(Map.Entry<String,String> header:resp.headers.entrySet()) {
