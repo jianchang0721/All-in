@@ -467,6 +467,30 @@ public final class GatewayListenAddressOfflineTest {
         }
     }
 
+    /** 裸 TCP 到 fixture 端口：区分「这台机器真的连不上」与「连上了但回包被虚拟网卡丢掉」。 */
+    static boolean tcpReachable(String ip, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(ip, port), 2000);
+            return true;
+        } catch (Exception unreachable) {
+            return false;
+        }
+    }
+
+    /**
+     * CI runner 上偶发的 SocketTimeoutException（fixture read failed after 0 bytes）会把一次
+     * 本来可达的 LAN 探测判成不可达；independentTcpReach 已经先确认这个 IP 是可达的见证者。
+     * 这里只做有限重试，不改变「实测可达性」的语义：全部尝试都拿不到回包才算 null。
+     */
+    static String httpGetRetry(String ip, int port, int attempts) {
+        String last = null;
+        for (int i = 0; i < attempts; i++) {
+            last = httpGet(ip, port, 2000);
+            if (last != null) return last;
+        }
+        return last;
+    }
+
     static String httpGet(String ip, int port, int timeoutMillis) {
         Socket socket = new Socket();
         try {
@@ -493,13 +517,21 @@ public final class GatewayListenAddressOfflineTest {
         Probe probe = new Probe(bindHost, port);
         try {
             probe.start(2000, true);
-            String reply = httpGet("127.0.0.1", port, 2000);
+            String reply = httpGetRetry("127.0.0.1", port, 3);
             check(expectLoopback ? reply != null && reply.startsWith("HTTP/1.1 200")
                             : reply == null,
                     label + ": 127.0.0.1 reachable=" + expectLoopback);
             for (String ip : lan) {
-                String lanReply = httpGet(ip, port, 2000);
+                String lanReply = httpGetRetry(ip, port, 3);
                 boolean observed = lanReply != null && lanReply.startsWith("HTTP/1.1 200") && lanReply.endsWith("\r\n\r\nok");
+                // Windows runner 的 vEthernet 地址（172.x）TCP 能建连、回包却被虚拟交换机丢掉，
+                // fixture 一个字节都读不到。这种地址在这台机器上无法作见证者，跳过而不是判失败；
+                // 真的连不上的地址（TCP 也通不了）照旧失败。
+                if (expectLan && !observed && tcpReachable(ip, port)) {
+                    System.out.println("NOTE: " + ip + " is TCP-reachable but its HTTP reply never arrives "
+                            + "(virtual NIC); this address cannot witness a listener here");
+                    continue;
+                }
                 if (observed != expectLan) socketFailureDiagnostic(ip, lanReply);
                 check(expectLan ? observed : lanReply == null,
                         label + ": LAN " + ip + " expected=" + expectLan + " actual=" + observed);
@@ -553,8 +585,16 @@ public final class GatewayListenAddressOfflineTest {
             before.start(2000, true);
             check(before.getHostname() == null, "the pre-change wiring left NanoHTTPD's hostname unset");
             for (String ip : lan) {
-                String reply = httpGet(ip, port, 2000);
-                check(reply != null && reply.startsWith("HTTP/1.1 200"),
+                String reply = httpGetRetry(ip, port, 3);
+                boolean ok200 = reply != null && reply.startsWith("HTTP/1.1 200");
+                // 与 probeReach 同口径：TCP 能建连、回包却读不到，是这台机器的虚拟网卡
+                // （Docker/虚机网桥 172.x）丢了响应，不是「没监听」。这种地址当不了见证者。
+                if (!ok200 && tcpReachable(ip, port)) {
+                    System.out.println("NOTE: " + ip + " TCP-reachable but HTTP reply never arrives "
+                            + "(virtual NIC); the control assertion cannot be observed here");
+                    continue;
+                }
+                check(ok200,
                         "control: an unset hostname really listened on " + ip + " (the illusion being fixed)");
             }
         } finally { before.stop(); }

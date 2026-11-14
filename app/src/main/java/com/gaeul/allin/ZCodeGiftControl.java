@@ -108,8 +108,11 @@ public final class ZCodeGiftControl {
      */
     private static JSONObject error(Exception ex) {
         if (ex instanceof ZCodeAuth.CaptchaRequiredException) {
-            JSONObject captcha = failure("ZCode 的领取要它自己客户端的验证码：请在 ZCode 客户端里领取");
-            try { captcha.put("outcome", "captcha"); } catch (Exception ignored) { }
+            JSONObject captcha = failure("ZCode 要求人机验证：请在面板点「完成安全验证」后重试领取");
+            try {
+                captcha.put("outcome", "captcha").put("needCaptcha", true)
+                        .put("captchaUrl", ZCodeCaptcha.PAGE_PATH);
+            } catch (Exception ignored) { }
             return captcha;
         }
         if (ex instanceof ZCodeAuth.ClaimUnknownException) {
@@ -136,8 +139,12 @@ public final class ZCodeGiftControl {
                 return late;
             }
             if (service.businessCode == 3007) {
-                JSONObject captcha = failure("ZCode 的领取要它自己客户端的验证码：请在 ZCode 客户端里领取");
-                try { captcha.put("outcome", "captcha").put("status", service.status).put("businessCode", 3007); } catch (Exception ignored) { }
+                JSONObject captcha = failure("ZCode 要求人机验证：请在面板点「完成安全验证」后重试领取");
+                try {
+                    captcha.put("outcome", "captcha").put("status", service.status)
+                            .put("businessCode", 3007).put("needCaptcha", true)
+                            .put("captchaUrl", ZCodeCaptcha.PAGE_PATH);
+                } catch (Exception ignored) { }
                 return captcha;
             }
             JSONObject failed = failure(service.getMessage());
@@ -286,6 +293,10 @@ public final class ZCodeGiftControl {
                 if ("captcha".equals(outcome)) {
                     captcha.put(item);
                     out.put("outcome", "captcha").put("error", result.optString("error", ""));
+                    // 把验证入口透给面板：按钮点下去能直接进入本应用内的人机验证，
+                    // 而不是只看到一句「去官方客户端」。
+                    for (String field : new String[]{"needCaptcha", "captchaUrl", "captcha"})
+                        if (result.has(field)) out.put(field, result.opt(field));
                     break;
                 }
                 failed.put(item);

@@ -530,17 +530,32 @@ public class ZCodeAuth {
      * 发出去只会换一个 3007。读不懂是 unknown，不是「不用校验」。
      */
     public static JSONObject giftClaim(String jwt, String device, String planId) throws Exception {
+        JSONObject configs;
         Boolean guarded;
         try {
-            guarded = giftClaimNeedsCaptcha(giftClientConfigs(jwt, device));
+            configs = giftClientConfigs(jwt, device);
+            guarded = giftClaimNeedsCaptcha(configs);
         } catch (Exception unread) {
             throw new ClaimUnknownException("读不到 ZCode 的领取校验配置，未发送领取请求");
         }
         if (guarded == null) throw new ClaimUnknownException("ZCode 的领取校验配置读不懂，未发送领取请求");
-        if (guarded.booleanValue()) throw new CaptchaRequiredException("ZCode 的领取要它自己客户端的验证码，请在 ZCode 客户端里领取");
+
+        java.util.Map<String,String> headers = marketingHeaders();
+        if (guarded.booleanValue()) {
+            // captcha 开着：只认本应用 WebView 跑官方阿里云 SDK 拿到的证明。没有证明就不发 ——
+            // 上游对这一条的态度是「没有 App 的证明只会白花一次拒绝」（社区插件同样如此），
+            // 试探既不会成功，还会累积风控计数。面板拿 needCaptcha 引导用户完成验证。
+            String token = ZCodeCaptcha.consume(jwt, device);
+            if (token.isEmpty()) {
+                throw new CaptchaRequiredException("ZCode 要求人机验证：请在面板点「完成安全验证」后重试领取");
+            }
+            headers.put(ZCodeCaptcha.HEADER, token);
+        }
         JSONObject body = new JSONObject();
         body.put("plan_id", planId);
-        return call("POST", GIFT_BASE + "/billing/claim", giftAuth(jwt), body, device, 20000, marketingHeaders());
+        // 3007 交回 ServiceException：ZCodeGiftControl 按既有契约把它读成 captcha，
+        // 并带上 needCaptcha 让面板进入本应用内的人机验证。带了证明仍被拒也是这一条。
+        return call("POST", GIFT_BASE + "/billing/claim", giftAuth(jwt), body, device, 20000, headers);
     }
 
     // ===================== 领取前的验证码配置：client/configs =====================
@@ -598,7 +613,10 @@ public class ZCodeAuth {
 
     /** feed 和领取都按客户端版本/平台/语言放行（上游 marketingHeaders） */
     private static Map<String,String> marketingHeaders() {
-        Map<String,String> headers = new LinkedHashMap<String,String>();
+        // 领取和 marketing/touch 与推理走同一个上游指纹门：只带 3 个头会被当成
+        // 非官方客户端，补齐 ZCode Desktop 整组头（X-Device-Mid 由 call() 补）。
+        java.util.Map<String,String> headers =
+                new LinkedHashMap<String,String>(ZCodeIdentity.headers("gift-claim", false, false));
         headers.put("X-ZCode-App-Version", APP_VERSION);
         headers.put("X-Platform", ZCodeGift.platform());
         headers.put("X-Client-Language", clientLanguage());
@@ -1178,6 +1196,8 @@ public class ZCodeAuth {
             conn.setConnectTimeout(4000);
             conn.setReadTimeout(6000);
             conn.setRequestProperty("Authorization", "Bearer " + key);
+            // 连通性探测同样要过客户端指纹门。
+            ZCodeIdentity.apply(conn, "probe", false, false);
             return conn.getResponseCode() == 200;
         } catch (Throwable t) {
             return false;

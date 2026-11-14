@@ -8410,14 +8410,113 @@
       }
     }
 
-    async function claimZCodeGift() {
+    // ZCode 从 11-07 起给领取加了阿里云无感人机验证（不是要人解谜题）。
+    // 这里加载官方 SDK，由用户在本应用内完成验证，把回调的 captchaVerifyParam
+    // 原样回传给网关；网关只在内存里存 5 分钟，用于下一次领取请求。
+    async function startZCodeCaptcha(retry) {
+      const box = document.getElementById('zcode-gift-body');
+      const say = (html) => { if (box) box.innerHTML = html; };
+      say('正在准备安全验证…');
+      let cfg;
+      try {
+        const cfgRes = await fetch(API_BASE + '/api/zcode/captcha');
+        cfg = await cfgRes.json();
+      } catch (e) {
+        say('<span style="color:#f59e0b;">拿不到验证参数：' + esc(errText(e, '未知错误'))
+          + '<br><span style="font-size:0.7rem;">也可以在官方 ZCode 客户端里领取今天的额度，再回来点「刷新」。</span></span>');
+        return;
+      }
+      if (!cfg.ok || !cfg.prefix || !cfg.sceneId) {
+        say('<span style="color:#f59e0b;">' + esc(cfg.error || '拿不到验证参数')
+          + '：请在官方 ZCode 客户端里领取</span>');
+        return;
+      }
+      say('<span style="color:#9ca3af;">ZCode 要求一次安全验证（官方无感验证）。点下面的按钮完成，之后会自动重新领取：</span><br>'
+        + '<div id="zc-captcha"></div>'
+        + '<button class="btn btn-outline" id="zc-captcha-btn" style="margin-top:8px;font-size:0.72rem;">完成安全验证</button>'
+        + '<div id="zc-captcha-note" style="margin-top:6px;font-size:0.7rem;color:#9ca3af;"></div>');
+      const note = (t, color) => {
+        const n = document.getElementById('zc-captcha-note');
+        if (n) { n.style.color = color || '#9ca3af'; n.textContent = t; }
+      };
+
+      let started = false;
+      const run = () => {
+        if (started) return;
+        if (typeof window.initAliyunCaptcha !== 'function') {
+          note('验证组件没有加载成功（脚本内容为空或被拦截）。请在官方 ZCode 客户端里领取今天的额度。', '#f59e0b');
+          return;
+        }
+        started = true;
+        note('验证组件已就绪，点「完成安全验证」继续。');
+        try {
+          const p = window.initAliyunCaptcha({
+            SceneId: cfg.sceneId,
+            prefix: cfg.prefix,
+            region: cfg.region || 'cn',
+            mode: 'popup',
+            element: '#zc-captcha',
+            button: '#zc-captcha-btn',
+            language: 'cn',
+            getInstance: function () {},
+            captchaVerifyCallback: function (verifyParam) {
+              // 同步返回让 SDK 立刻判定通过；token 异步回传，不阻塞验证流程。
+              fetch(API_BASE + cfg.tokenPath, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({token: String(verifyParam)})
+              }).then(r => r.json()).then(saved => {
+                if (saved && saved.ok) {
+                  say('<span style="color:#34d399;">验证完成，正在重新领取…</span>');
+                  if (typeof retry === 'function') setTimeout(retry, 400);
+                } else {
+                  note('验证结果没被接受，请再点一次「完成安全验证」。', '#f59e0b');
+                }
+              }).catch(e => note('验证结果回传失败：' + errText(e, '未知错误'), '#f59e0b'));
+              return { captchaResult: true, bizResult: true };
+            },
+            onBizResultCallback: function () {}
+          });
+          if (p && typeof p.then === 'function') {
+            p.then(function () { note('验证组件已就绪，点「完成安全验证」继续。'); },
+                   function (e) { note('验证组件初始化失败：' + (e && (e.message || e)), '#f59e0b'); });
+          }
+        } catch (e) {
+          note('验证组件初始化异常：' + (e && (e.message || e)), '#f59e0b');
+        }
+      };
+
+      if (typeof window.initAliyunCaptcha === 'function') { run(); return; }
+      const btn = document.getElementById('zc-captcha-btn');
+      if (btn) btn.addEventListener('click', function () {
+        note(started ? '验证组件已就绪，请再点一次' : '验证组件还在加载，请稍候…');
+      });
+      note('正在加载验证组件…');
+      const s = document.createElement('script');
+      s.src = cfg.sdkUrl;
+      s.onload = run;
+      s.onerror = function () { note('验证组件加载失败（网络不可达或被拦截）。请在官方 ZCode 客户端里领取。', '#f59e0b'); };
+      document.head.appendChild(s);
+      // Chromium 在资源被换成空响应时也会触发 onload，所以再用一次兜底检查。
+      setTimeout(function () {
+        if (!started) note('验证组件 20 秒内没有就绪。请在官方 ZCode 客户端里领取今天的额度，再回来点「刷新」。', '#f59e0b');
+      }, 20000);
+    }
+
+    async function claimZCodeGift(captchaRetried) {
       const box = document.getElementById('zcode-gift-body');
       if (box) box.innerHTML = '领取中…';
       try {
         const res = await fetch(API_BASE + '/api/zcode/gift?action=claimall');
         const d = await res.json();
         if (!d.ok) {
-          if (box) box.innerHTML = '<span style="color:#f59e0b;">' + esc(d.error || '领取失败') + '</span>';
+          if (d.needCaptcha && !captchaRetried) {
+            await startZCodeCaptcha(() => claimZCodeGift(true));
+            return;
+          }
+          if (box) box.innerHTML = '<span style="color:#f59e0b;">' + esc(d.error || '领取失败')
+            + (d.needCaptcha ? '<br><span style="font-size:0.7rem;">也可以在官方 ZCode 客户端里领取今天的额度，再回来点「刷新」。</span>' : '')
+            + '</span>';
           return;
         }
         const got = (d.claimed || []).length;

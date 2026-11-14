@@ -114,7 +114,11 @@ final class ZhipuEnvelope {
 
     static int codeStatus(int code) {
         if (code >= 1000 && code <= 1005) return 401;
-        if (code == 1113 || code >= 1302 && code <= 1399) return 429;
+        // 1113 是「没有可用资源包 / 余额不足」，不是限流。以前映射成 429，
+        // 面板会显示「请求受限流 / 实际推理」并触发无意义的重试与冷却；
+        // 402 才能落到额度层，提示去领赠送额度或确认 Coding Plan。
+        if (code == 1113) return 402;
+        if (code >= 1302 && code <= 1399) return 429;
         if (code == 1220) return 403;
         if (code == 3012) return 405;
         if (code >= 1210 && code <= 1229 || code == 1261 || code == 1301) return 400;

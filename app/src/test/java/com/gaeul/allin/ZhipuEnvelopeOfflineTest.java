@@ -45,7 +45,7 @@ public final class ZhipuEnvelopeOfflineTest {
         check(adapted.adapted && adapted.status == 401 && "1000".equals(adapted.code));
         check(adapted.errorBody.contains("bad") && !adapted.errorBody.contains("secret"));
         check(Arrays.equals(bytes(adapted.errorBody), read(adapted.body))); adapted.body.close(); check(original.closed);
-        int[][] mapping = {{999,502},{1000,401},{1005,401},{1006,502},{1113,429},{1210,400},{1219,400},{1220,403},{1229,400},{1230,502},{1261,400},{1301,400},{1302,429},{1399,429},{1400,502}};
+        int[][] mapping = {{999,502},{1000,401},{1005,401},{1006,502},{1113,402},{1210,400},{1219,400},{1220,403},{1229,400},{1230,502},{1261,400},{1301,400},{1302,429},{1399,429},{1400,502}};
         for (int[] entry : mapping) check(ZhipuEnvelope.codeStatus(entry[0]) == entry[1]);
         String[] bad = {"https://open.bigmodel.cn.evil.com/api/v1", "https://api.z.ai.evil/api/v1", "https://api.z.ai/api/paas/v4/chat/completions", "https://api.z.ai/api/v1/other", "https://api.z.ai/api/monitoring"};
         for (String url : bad) check(!ZhipuEnvelope.applicable(url,200,"application/json",null,false));

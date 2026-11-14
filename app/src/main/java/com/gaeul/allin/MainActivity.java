@@ -224,7 +224,7 @@ public class MainActivity extends Activity {
 
             @Override
             public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view, String url) {
-                if (isTrustedPanelResource(url)) return null;
+                if (isTrustedPanelResource(url) || isCaptchaResource(url)) return null;
                 return new android.webkit.WebResourceResponse("text/plain", "UTF-8", new java.io.ByteArrayInputStream(new byte[0]));
             }
 
@@ -463,6 +463,36 @@ public class MainActivity extends Activity {
             }
             return false;
         }catch(Exception invalid){return false;}
+    }
+
+    /**
+     * 面板要加载的**非 assets** 资源白名单：只有阿里云验证码 SDK 这一族。
+     *
+     * <p>面板的 ZCode「一键领取」需要阿里云验证码组件（configs 里下发
+     * {@code captcha.prefix/sceneId/region}）。默认那条
+     * {@code shouldInterceptRequest} 会把所有非 assets 请求换成**空响应**，脚本因此
+     * 「加载成功但内容为空」：onload 照常触发，{@code window.initAliyunCaptcha} 却不存在，
+     * 面板里的按钮拿不到任何绑定 —— 用户看到的就是「按钮点了没反应」。
+     *
+     * <p>这里按域名后缀 + 路径前缀精确放行，且只认 https：SDK/动态指纹脚本在
+     * {@code *.alicdn.com/captcha-frontend/}，设备指纹与校验在 {@code *.aliyuncs.com}
+     * 与 {@code *.aliyuncaptcha.com}。其余域名照旧被拦。
+     */
+    static boolean isCaptchaResource(String url) {
+        if (url == null) return false;
+        try {
+            java.net.URI u = new java.net.URI(url);
+            if (!"https".equalsIgnoreCase(u.getScheme())) return false;
+            if (u.getUserInfo() != null) return false;
+            String host = u.getHost() == null ? "" : u.getHost().toLowerCase(java.util.Locale.ROOT);
+            String path = u.getRawPath() == null ? "" : u.getRawPath();
+            if (host.endsWith(".alicdn.com") && path.startsWith("/captcha-frontend/")) return true;
+            if (host.endsWith(".aliyuncaptcha.com")) return true;
+            if (host.endsWith(".aliyuncs.com")
+                    && (host.startsWith("captcha") || host.startsWith("cloudauth-device")
+                        || host.contains(".device.saf.") || host.startsWith("pre-device"))) return true;
+            return false;
+        } catch (Exception invalid) { return false; }
     }
 
     private boolean bridgeAllowed() {
